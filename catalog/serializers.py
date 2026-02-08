@@ -272,3 +272,263 @@ class CollectionAdminSerializer(serializers.ModelSerializer):
         elif obj.image:
             return obj.image.url
         return None
+
+
+# =============================================================================
+# Product Serializers
+# =============================================================================
+
+from .models import Product, ProductImage, ProductSize
+
+
+class ProductSizeSerializer(serializers.ModelSerializer):
+    """
+    Serializer for product sizes/inventory.
+    """
+    is_available = serializers.ReadOnlyField()
+    
+    class Meta:
+        model = ProductSize
+        fields = ['id', 'size', 'quantity', 'is_available']
+        read_only_fields = ['id', 'is_available']
+
+
+class ProductImageSerializer(serializers.ModelSerializer):
+    """
+    Serializer for product gallery images.
+    """
+    image_url = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = ProductImage
+        fields = ['id', 'image', 'image_url', 'alt_text', 'position']
+        read_only_fields = ['id', 'image_url']
+    
+    def get_image_url(self, obj):
+        request = self.context.get('request')
+        if obj.image and request:
+            return request.build_absolute_uri(obj.image.url)
+        elif obj.image:
+            return obj.image.url
+        return None
+
+
+class ProductListSerializer(serializers.ModelSerializer):
+    """
+    Serializer for public product listing.
+    Minimal fields for fast loading.
+    """
+    main_image_url = serializers.SerializerMethodField()
+    collection_name = serializers.CharField(source='collection.name', read_only=True)
+    collection_slug = serializers.CharField(source='collection.slug', read_only=True)
+    is_in_stock = serializers.ReadOnlyField()
+    
+    class Meta:
+        model = Product
+        fields = [
+            'id',
+            'name',
+            'slug',
+            'price',
+            'compare_at_price',
+            'main_image_url',
+            'collection_name',
+            'collection_slug',
+            'is_in_stock',
+        ]
+        read_only_fields = fields
+    
+    def get_main_image_url(self, obj):
+        request = self.context.get('request')
+        if obj.main_image and request:
+            return request.build_absolute_uri(obj.main_image.url)
+        elif obj.main_image:
+            return obj.main_image.url
+        return None
+
+
+class ProductDetailSerializer(serializers.ModelSerializer):
+    """
+    Serializer for product detail view.
+    Includes all fields, gallery, and sizes.
+    """
+    main_image_url = serializers.SerializerMethodField()
+    collection = CollectionListSerializer(read_only=True)
+    gallery_images = ProductImageSerializer(many=True, read_only=True)
+    sizes = ProductSizeSerializer(many=True, read_only=True)
+    is_in_stock = serializers.ReadOnlyField()
+    total_stock = serializers.ReadOnlyField()
+    
+    class Meta:
+        model = Product
+        fields = [
+            'id',
+            'name',
+            'slug',
+            'description',
+            'material_info',
+            'price',
+            'compare_at_price',
+            'main_image_url',
+            'collection',
+            'gallery_images',
+            'sizes',
+            'is_in_stock',
+            'total_stock',
+            'is_active',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = fields
+    
+    def get_main_image_url(self, obj):
+        request = self.context.get('request')
+        if obj.main_image and request:
+            return request.build_absolute_uri(obj.main_image.url)
+        elif obj.main_image:
+            return obj.main_image.url
+        return None
+
+
+class ProductCreateSerializer(serializers.ModelSerializer):
+    """
+    Serializer for creating products.
+    Validates collection is active.
+    """
+    sizes = ProductSizeSerializer(many=True, required=False)
+    
+    class Meta:
+        model = Product
+        fields = [
+            'id',
+            'collection',
+            'name',
+            'description',
+            'material_info',
+            'price',
+            'compare_at_price',
+            'main_image',
+            'is_active',
+            'sizes',
+        ]
+        read_only_fields = ['id']
+    
+    def validate_collection(self, value):
+        """Validate collection is active."""
+        if not value.is_active:
+            raise serializers.ValidationError("Cannot assign product to an inactive collection.")
+        return value
+    
+    def validate_main_image(self, value):
+        """Validate main image."""
+        if value:
+            validate_image_file_extension(value)
+            validate_image_file_size(value)
+            validate_image_mime_type(value)
+        return value
+    
+    def validate(self, data):
+        """Cross-field validation."""
+        price = data.get('price')
+        compare_at_price = data.get('compare_at_price')
+        
+        if compare_at_price is not None and price is not None:
+            if compare_at_price < price:
+                raise serializers.ValidationError({
+                    'compare_at_price': 'Compare at price must be >= selling price.'
+                })
+        return data
+    
+    def create(self, validated_data):
+        sizes_data = validated_data.pop('sizes', [])
+        product = Product.objects.create(**validated_data)
+        
+        for size_data in sizes_data:
+            ProductSize.objects.create(product=product, **size_data)
+        
+        return product
+    
+    def to_representation(self, instance):
+        return ProductDetailSerializer(instance, context=self.context).data
+
+
+class ProductUpdateSerializer(serializers.ModelSerializer):
+    """
+    Serializer for updating products.
+    """
+    sizes = ProductSizeSerializer(many=True, required=False)
+    
+    class Meta:
+        model = Product
+        fields = [
+            'id',
+            'collection',
+            'name',
+            'description',
+            'material_info',
+            'price',
+            'compare_at_price',
+            'main_image',
+            'is_active',
+            'sizes',
+        ]
+        read_only_fields = ['id']
+        extra_kwargs = {
+            'collection': {'required': False},
+            'name': {'required': False},
+            'description': {'required': False},
+            'main_image': {'required': False},
+            'price': {'required': False},
+        }
+    
+    def validate_collection(self, value):
+        """Validate collection is active."""
+        if value and not value.is_active:
+            raise serializers.ValidationError("Cannot assign product to an inactive collection.")
+        return value
+    
+    def validate_main_image(self, value):
+        """Validate main image if provided."""
+        if value:
+            validate_image_file_extension(value)
+            validate_image_file_size(value)
+            validate_image_mime_type(value)
+        return value
+    
+    def validate(self, data):
+        """Cross-field validation."""
+        price = data.get('price', self.instance.price if self.instance else None)
+        compare_at_price = data.get('compare_at_price')
+        
+        if compare_at_price is not None and price is not None:
+            if compare_at_price < price:
+                raise serializers.ValidationError({
+                    'compare_at_price': 'Compare at price must be >= selling price.'
+                })
+        return data
+    
+    def update(self, instance, validated_data):
+        sizes_data = validated_data.pop('sizes', None)
+        
+        # Update product fields
+        for attr, value in validated_data.items():
+            if attr == 'main_image' and value:
+                # Delete old image
+                if instance.main_image:
+                    instance.main_image.delete(save=False)
+            setattr(instance, attr, value)
+        
+        instance.save()
+        
+        # Update sizes if provided
+        if sizes_data is not None:
+            # Clear existing and recreate
+            instance.sizes.all().delete()
+            for size_data in sizes_data:
+                ProductSize.objects.create(product=instance, **size_data)
+        
+        return instance
+    
+    def to_representation(self, instance):
+        return ProductDetailSerializer(instance, context=self.context).data
+

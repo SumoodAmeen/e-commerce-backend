@@ -249,3 +249,126 @@ class AdminCollectionViewSet(viewsets.ModelViewSet):
         return Response({
             'detail': f'{updated_count} collection(s) deactivated successfully.'
         })
+
+
+# =============================================================================
+# Product ViewSets
+# =============================================================================
+
+from .models import Product, ProductImage, ProductSize
+from .serializers import (
+    ProductListSerializer,
+    ProductDetailSerializer,
+    ProductCreateSerializer,
+    ProductUpdateSerializer,
+)
+
+
+class PublicProductViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    Public API for product listing.
+    
+    Endpoints:
+    - GET /api/products/ - List active products
+    - GET /api/products/{slug}/ - Get product detail
+    """
+    
+    permission_classes = [AllowAny]
+    lookup_field = 'slug'
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['name', 'description']
+    ordering_fields = ['name', 'price', 'created_at']
+    ordering = ['-created_at']
+    
+    def get_queryset(self):
+        """Return active products with optional collection filter."""
+        queryset = Product.objects.filter(
+            is_active=True,
+            collection__is_active=True  # Only show products from active collections
+        ).select_related('collection').prefetch_related('sizes', 'gallery_images')
+        
+        # Filter by collection slug or ID
+        collection = self.request.query_params.get('collection')
+        if collection:
+            # Try slug first, then ID
+            queryset = queryset.filter(
+                models.Q(collection__slug=collection) | 
+                models.Q(collection__id=collection) if collection.isdigit() else
+                models.Q(collection__slug=collection)
+            )
+        
+        return queryset.order_by('-created_at')
+    
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return ProductListSerializer
+        return ProductDetailSerializer
+    
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
+
+
+class AdminProductViewSet(viewsets.ModelViewSet):
+    """
+    Admin API for product management.
+    
+    Endpoints:
+    - GET /api/admin/products/ - List all products
+    - POST /api/admin/products/ - Create product
+    - GET /api/admin/products/{id}/ - Get product
+    - PUT /api/admin/products/{id}/ - Update product
+    - DELETE /api/admin/products/{id}/ - Delete product
+    """
+    
+    permission_classes = [IsAuthenticated, IsAdminUser]
+    queryset = Product.objects.all().select_related('collection').prefetch_related('sizes', 'gallery_images')
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['name', 'description']
+    ordering_fields = ['name', 'price', 'created_at', 'is_active']
+    ordering = ['-created_at']
+    
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return ProductCreateSerializer
+        elif self.action in ['update', 'partial_update']:
+            return ProductUpdateSerializer
+        elif self.action == 'list':
+            return ProductListSerializer
+        return ProductDetailSerializer
+    
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        
+        # Delete associated images
+        if instance.main_image:
+            instance.main_image.delete(save=False)
+        for img in instance.gallery_images.all():
+            if img.image:
+                img.image.delete(save=False)
+        
+        self.perform_destroy(instance)
+        return Response(
+            {'detail': 'Product deleted successfully.'},
+            status=status.HTTP_204_NO_CONTENT
+        )
+    
+    @action(detail=True, methods=['post'])
+    def activate(self, request, pk=None):
+        instance = self.get_object()
+        instance.is_active = True
+        instance.save(update_fields=['is_active', 'updated_at'])
+        return Response(ProductDetailSerializer(instance, context={'request': request}).data)
+    
+    @action(detail=True, methods=['post'])
+    def deactivate(self, request, pk=None):
+        instance = self.get_object()
+        instance.is_active = False
+        instance.save(update_fields=['is_active', 'updated_at'])
+        return Response(ProductDetailSerializer(instance, context={'request': request}).data)

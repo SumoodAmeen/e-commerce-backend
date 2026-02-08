@@ -147,3 +147,291 @@ class Collection(models.Model):
         if self.image:
             return self.image.url
         return None
+
+
+# =============================================================================
+# Product Models
+# =============================================================================
+
+def product_image_upload_path(instance, filename):
+    """
+    Generate upload path for product main images.
+    """
+    import os
+    import uuid
+    
+    ext = os.path.splitext(filename)[1].lower()
+    unique_name = f"{uuid.uuid4().hex}{ext}"
+    return f"products/{unique_name}"
+
+
+def product_gallery_upload_path(instance, filename):
+    """
+    Generate upload path for product gallery images.
+    """
+    import os
+    import uuid
+    
+    ext = os.path.splitext(filename)[1].lower()
+    unique_name = f"{uuid.uuid4().hex}{ext}"
+    return f"products/gallery/{unique_name}"
+
+
+class Product(models.Model):
+    """
+    Represents a product in the e-commerce catalog.
+    
+    Each product belongs to exactly one Collection.
+    Products have inventory managed through ProductSize.
+    """
+    
+    collection = models.ForeignKey(
+        Collection,
+        on_delete=models.PROTECT,  # Prevent accidental deletion of collections with products
+        related_name='products',
+        verbose_name=_('collection'),
+        help_text=_('The collection this product belongs to.')
+    )
+    
+    name = models.CharField(
+        _('name'),
+        max_length=255,
+        db_index=True,
+        help_text=_('Product name.')
+    )
+    
+    slug = models.SlugField(
+        _('slug'),
+        max_length=300,
+        unique=True,
+        db_index=True,
+        editable=False,
+        help_text=_('Auto-generated URL-safe identifier.')
+    )
+    
+    description = models.TextField(
+        _('description'),
+        help_text=_('Detailed product description.')
+    )
+    
+    material_info = models.TextField(
+        _('material info'),
+        blank=True,
+        default='',
+        help_text=_('Material and care instructions.')
+    )
+    
+    price = models.DecimalField(
+        _('price'),
+        max_digits=10,
+        decimal_places=2,
+        help_text=_('Current selling price.')
+    )
+    
+    compare_at_price = models.DecimalField(
+        _('compare at price'),
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text=_('Original price for showing discounts. Must be >= price.')
+    )
+    
+    main_image = models.ImageField(
+        _('main image'),
+        upload_to=product_image_upload_path,
+        validators=[validate_image],
+        help_text=_('Main product image for listings. Allowed: JPG, PNG, WEBP. Max: 5MB.')
+    )
+    
+    is_active = models.BooleanField(
+        _('is active'),
+        default=True,
+        db_index=True,
+        help_text=_('Designates whether this product is visible to customers.')
+    )
+    
+    created_at = models.DateTimeField(
+        _('created at'),
+        auto_now_add=True
+    )
+    
+    updated_at = models.DateTimeField(
+        _('updated at'),
+        auto_now=True
+    )
+    
+    class Meta:
+        verbose_name = _('product')
+        verbose_name_plural = _('products')
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['collection', 'is_active', '-created_at']),
+            models.Index(fields=['is_active', '-created_at']),
+        ]
+    
+    def __str__(self):
+        return self.name
+    
+    def save(self, *args, **kwargs):
+        """
+        Override save to auto-generate slug on creation.
+        """
+        if not self.slug:
+            self.slug = generate_unique_slug(self.name, Product)
+        super().save(*args, **kwargs)
+    
+    def clean(self):
+        """
+        Model-level validation.
+        """
+        from django.core.exceptions import ValidationError
+        super().clean()
+        
+        # Validate compare_at_price >= price
+        if self.compare_at_price is not None and self.price is not None:
+            if self.compare_at_price < self.price:
+                raise ValidationError({
+                    'compare_at_price': _('Compare at price must be greater than or equal to the selling price.')
+                })
+        
+        # Validate collection is active (for new products or collection changes)
+        if self.collection_id:
+            try:
+                collection = Collection.objects.get(pk=self.collection_id)
+                if not collection.is_active:
+                    raise ValidationError({
+                        'collection': _('Cannot assign product to an inactive collection.')
+                    })
+            except Collection.DoesNotExist:
+                raise ValidationError({
+                    'collection': _('Selected collection does not exist.')
+                })
+    
+    @property
+    def main_image_url(self):
+        """Returns the URL for the main product image."""
+        if self.main_image:
+            return self.main_image.url
+        return None
+    
+    @property
+    def total_stock(self):
+        """Returns total stock across all sizes."""
+        return self.sizes.aggregate(total=models.Sum('quantity'))['total'] or 0
+    
+    @property
+    def is_in_stock(self):
+        """Returns True if any size has stock."""
+        return self.sizes.filter(quantity__gt=0).exists()
+
+
+class ProductImage(models.Model):
+    """
+    Gallery images for a product.
+    
+    Allows multiple images per product with ordering support.
+    """
+    
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.CASCADE,
+        related_name='gallery_images',
+        verbose_name=_('product')
+    )
+    
+    image = models.ImageField(
+        _('image'),
+        upload_to=product_gallery_upload_path,
+        validators=[validate_image],
+        help_text=_('Gallery image. Allowed: JPG, PNG, WEBP. Max: 5MB.')
+    )
+    
+    alt_text = models.CharField(
+        _('alt text'),
+        max_length=255,
+        blank=True,
+        default='',
+        help_text=_('Alternative text for accessibility.')
+    )
+    
+    position = models.PositiveIntegerField(
+        _('position'),
+        default=0,
+        help_text=_('Display order (lower numbers appear first).')
+    )
+    
+    created_at = models.DateTimeField(
+        _('created at'),
+        auto_now_add=True
+    )
+    
+    class Meta:
+        verbose_name = _('product image')
+        verbose_name_plural = _('product images')
+        ordering = ['position', 'created_at']
+    
+    def __str__(self):
+        return f"{self.product.name} - Image {self.position}"
+    
+    @property
+    def image_url(self):
+        """Returns the URL for this gallery image."""
+        if self.image:
+            return self.image.url
+        return None
+
+
+class ProductSize(models.Model):
+    """
+    Size and inventory for a product.
+    
+    Each product can have multiple sizes with individual stock quantities.
+    Uses PositiveIntegerField to prevent negative stock.
+    """
+    
+    SIZE_CHOICES = [
+        ('XS', 'XS'),
+        ('S', 'S'),
+        ('M', 'M'),
+        ('L', 'L'),
+        ('XL', 'XL'),
+        ('XXL', 'XXL'),
+        ('XXXL', 'XXXL'),
+        ('ONE_SIZE', 'One Size'),
+    ]
+    
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.CASCADE,
+        related_name='sizes',
+        verbose_name=_('product')
+    )
+    
+    size = models.CharField(
+        _('size'),
+        max_length=20,
+        choices=SIZE_CHOICES,
+        help_text=_('Size option.')
+    )
+    
+    quantity = models.PositiveIntegerField(
+        _('quantity'),
+        default=0,
+        help_text=_('Available stock for this size.')
+    )
+    
+    class Meta:
+        verbose_name = _('product size')
+        verbose_name_plural = _('product sizes')
+        ordering = ['size']
+        unique_together = [['product', 'size']]  # Prevent duplicate sizes per product
+    
+    def __str__(self):
+        return f"{self.product.name} - {self.size} ({self.quantity})"
+    
+    @property
+    def is_available(self):
+        """Returns True if this size is in stock."""
+        return self.quantity > 0
+
