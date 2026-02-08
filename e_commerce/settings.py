@@ -55,6 +55,7 @@ INSTALLED_APPS = [
     'authentication_app',
     'catalog',
     'homepage',
+    'contact',
 ]
 
 MIDDLEWARE = [
