@@ -54,6 +54,7 @@ INSTALLED_APPS = [
     # Local apps
     'authentication_app',
     'catalog',
+    'homepage',
 ]
 
 MIDDLEWARE = [

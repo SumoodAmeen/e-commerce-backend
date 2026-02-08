@@ -34,8 +34,11 @@ urlpatterns = [
     path('api/auth/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('api/auth/token/verify/', TokenVerifyView.as_view(), name='token_verify'),
     
-    # Catalog API (collections)
+    # Catalog API (collections, products)
     path('api/', include('catalog.urls')),
+    
+    # Homepage API (hero section)
+    path('api/homepage/', include('homepage.urls')),
 ]
 
 
