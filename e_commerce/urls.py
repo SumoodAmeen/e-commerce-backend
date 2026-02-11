@@ -39,6 +39,9 @@ urlpatterns = [
     
     # Homepage API (hero section)
     path('api/homepage/', include('homepage.urls')),
+    
+    # Cart & Wishlist API (JWT protected)
+    path('api/', include('cart.urls')),
 ]
 
 

@@ -56,6 +56,7 @@ INSTALLED_APPS = [
     'catalog',
     'homepage',
     'contact',
+    'cart',
 ]
 
 MIDDLEWARE = [
